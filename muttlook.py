@@ -12,13 +12,14 @@ import markdown  # Markdown
 import magic  # python-magic (for mimetypes)
 from mailparser_reply import EmailReplyParser
 
-commandsFile = "/tmp/muttlook/mutt.cmd"
+# due to some reason could not source mutt.cmd
+commandsFile = "/tmp/muttlook/mutt_cmd"
 markdownFile = "/tmp/muttlook/mimelook-md"
 # orgMsg is generated everything when starting drafting reply via mutt-trim, configed via $editor in mutt
 orgMsg = "/tmp/muttlook/original.msg"
 htmlFile = "/tmp/muttlook/mimelook.html"
 logFile = "/tmp/muttlook/mimelog.log"
-# todo add Swedish and Chinese later
+# TODO: add Swedish and Chinese later
 languages = ['en', 'de']
 
 import logging
@@ -45,6 +46,7 @@ mime = magic.Magic(mime=True)
 def export_inline_attachments(message, dstdir):
     # find inline attachments in plaintext version
     #inlines = re.findall("\[cid:.*?\]", message.body.split("--- mail_boundary ---")[0])
+    # TODO: better match test like html detect part
     try:
         message_html = message.body.split("--- mail_boundary ---")[1]
     except IndexError as e:
@@ -65,7 +67,7 @@ def export_inline_attachments(message, dstdir):
         # find content id
         id_match = re.search("@.*", inline)
         attachment_id = inline[id_match.start()+1:-1]
-        # TODO clear the unbound
+        # TODO: clear the unbound
         # if id_match := re.search("@.*", inline):
         #     attachment_id = inline[id_match.start()+1:-1]
         # else:
@@ -143,14 +145,19 @@ def message_from_msgid(msgid):
 
 # create crazy outlook-style html reply from message id and the desired html message
 def format_outlook_reply(message, htmltoinsert):
-    try:
-        message_html = message.body.split("--- mail_boundary ---")[1]
-    except IndexError as e:
-        logging.error("org message does not have mail_boundary: {} :( )\n".format(e))
+    # Restruct find html part via mail boundary
+    pattern = r"--- mail_boundary ---"
+    substrings = re.split(pattern, message.body, flags=re.IGNORECASE)
+    if len(substrings) == 1:
+        logging.info("org message does not have mail_boundary! ")
         message_html = message.body
+    for _, substring in enumerate(substrings[1:], 1):  # Skip the first element (before the first match)
+        m = re.search("<body.*?>", substring)
+        if m is not None:
+            message_html = substring.strip()
+            break
     else:
-        logging.error("org message strange errors :) \n")
-
+        message_html = substrings[-1].strip()
     # convert CRLF to LF
     message_html = message_html.replace("\r\n", "\n")
 
@@ -275,25 +282,9 @@ def html_escape(text):
 # insane outlook-style html section. The plaintext message is converted
 # to HTML supporting markdown syntax.
 def plain2fancy(msg):
-    # TODO update later for plaintext transformation
-    # # find and strip MIME parts in the ending of the plaintext
-    # plaintext, parts = find_mime_parts(plaintext)
-
-    # # escape HTML in the plaintext, handling quoted content explicitly
-    # escaped_plaintext = unescape_quotes(html_escape(escape_quotes(plaintext)))
-
-    # # handle signature - we expect linebreaks to be preserved in the signature,
-    # # but let everything else wrap (reminder: Markdown preserves linebreaks if
-    # # there's two spaces at the end of a line)
-    # escaped_plaintext = escape_signature_linebreaks(escaped_plaintext)
-
-    # logging.info("msg to process is: {}:{}\n".format(type(msg), msg))
-    # TODO
-    # reply_msg = mailparser.parse_from_string(msg)
-    # latest_reply = EmailReplyParser(languages=languages).parse_reply(text=msg) 
+    # INFO: Parser drafted reply via stdin msg
     reply = EmailReplyParser(languages=languages).read(text=msg) 
     latest_reply = reply.latest_reply
-    logging.info("reply text is: {}\n".format(latest_reply))
     if latest_reply is not None:
         # plaintext is converted to html, supporting markdown syntax
         # loosely inspired by http://webcache.googleusercontent.com/search?q=cache:R1RQkhWqwEgJ:tess.oconnor.cx/2008/01/html-email-composition-in-emacs
@@ -301,14 +292,6 @@ def plain2fancy(msg):
     else:
         latest_reply = ''
         text2html = ""
-
-
-    # Replace original in-line links with new CID links
-
-    # from Reply-To-ID as id to get original message intend to reply to
-    # message = message_from_msgid(msgid)
-    # message = message_from_pipe(msg)
-    # msgid = json.loads(message.headers_json)['Message-ID'][1:-1]
     
     # Q&D way to get msg_id of the orignal msg to reply,  refer orgMsg def 
     org_reply_msg = mailparser.parse_from_file(orgMsg)
@@ -316,7 +299,7 @@ def plain2fancy(msg):
     reply_to_id = org_reply_msg.headers['In-Reply-To'][1:-1]
     # logging.info("Reply-To-ID: {}\n".format(reply_to_id))
     message = message_from_msgid(reply_to_id)
-    # logging.info("original message:\n{}\n".format(message ))
+    # logging.info("original message:\n{}\n".format(message.body))
 
     # insane outlook-style html reply
     madness = format_outlook_reply(message, text2html)
@@ -338,7 +321,6 @@ def plain2fancy(msg):
     matches = re.findall(link_pattern, latest_reply)
     # Replace in-line links with CID attachments and modify original links
     if matches:
-        logging.info("matched!")
         cid_mapping = {}
         new_reply = latest_reply
         for link in matches:
@@ -349,10 +331,7 @@ def plain2fancy(msg):
                 new_reply = latest_reply.replace(original_link, f"cid:{new_cid_link}")
         if new_reply != latest_reply:
             new_msg = msg.replace(latest_reply, new_reply)
-            logging.info(f"old madness {madness}")
             new_html = madness.replace(original_link, f"cid:{new_cid_link}")
-            logging.info(f"org lin in html {original_link} is changed into cid link: cid:{new_cid_link}\n")
-            logging.info(f"new madness {new_html}")
         attachments.extend(list(cid_mapping.items()))
     else:
         new_msg = msg
@@ -363,14 +342,9 @@ def plain2fancy(msg):
     # attachment, separated by newlines
     attachment_str = ""
     for attachment in attachments:
-        # not need to have type in mutt
-        # logging.info("attachemtn to process :\n{}\n".format(attachment))
-        # mimetype = mime.from_file(attachment[1])
-        # attachment_str += "<#part type=\"{}\" filename=\"{}\" disposition=inline id=\"{}@{}\"><#/part>\n"\
-        #     .format(mimetype, attachment[1], os.path.basename(attachment[1]), attachment[0])
         attachment_str += "<attach-file>'{}'<enter><toggle-disposition><edit-content-id>^u'{}'<enter><tag-entry>"\
             .format(attachment[1], attachment[0])
-    # TODO
+    # TODO:
     # # also include attachments that were already present in the plaintext
     # attachment_str += "\n".join(parts)
 
@@ -381,16 +355,6 @@ def plain2fancy(msg):
     with open(markdownFile, "w") as f:
         f.write(new_msg)
 
-    # return the multipart message
-#     multimsg = """<#multipart type=alternative>
-# <#part type=text/plain>
-# {}
-# <#/part>
-# <#part type=text/html>
-# {}
-# <#/part>
-# <#/multipart>
-# {}""".format(plaintext, madness, attachment_str)
     if attachment_str:
         mutt_cmd = "push <attach-file>'{}'<enter><toggle-disposition><toggle-unlink><first-entry><detach-file><attach-file>'{}'<enter><toggle-disposition><toggle-unlink><tag-entry><previous-entry><tag-entry><group-alternatives>{}<first-entry><tag-entry><group-related>".format(markdownFile, htmlFile, attachment_str)
     else:
@@ -404,11 +368,11 @@ if __name__ == '__main__':
     stdin = sys.stdin.read()
     msg = stdin
 
-    # dummy plaintext for new TODO update later
-    logging.info("piped entry is :\n{}\n".format(msg))
+    # TODO: dummy plaintext for new TODO update later
+    # logging.info("piped entry is :\n{}\n".format(msg))
 
     try:
         plain2fancy(msg)
     except Exception as e:
-        logging.info("final message:\n{}\n".format(e))
+        # logging.info("final message:\n{}\n".format(e))
         raise e
