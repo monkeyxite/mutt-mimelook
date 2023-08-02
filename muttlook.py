@@ -344,10 +344,6 @@ def plain2fancy(msg):
     for attachment in attachments:
         attachment_str += "<attach-file>'{}'<enter><toggle-disposition><edit-content-id>^u'{}'<enter><tag-entry>"\
             .format(attachment[1], attachment[0])
-    # TODO:
-    # # also include attachments that were already present in the plaintext
-    # attachment_str += "\n".join(parts)
-
     # write html message to file for inspection before sending
     with open(htmlFile, "w") as f:
         f.write(new_html)
