@@ -45,7 +45,7 @@ mime = magic.Magic(mime=True)
 
 
 def export_inline_attachments(message, dstdir):
-    """Export the inlime attachement to target dir."""
+    """Export the inlime attachement in the mail to reply into target dir."""
     # find inline attachments in plaintext version
     # inlines = re.findall("\[cid:.*?\]", message.body.split("--- mail_boundary ---")[0])
     # TODO: better match test like html detect part
@@ -68,15 +68,10 @@ def export_inline_attachments(message, dstdir):
 
         # find content id
         id_match = re.search("@.*", inline)
-        attachment_id = inline[id_match.start() + 1 : -1]
-        # TODO: clear the unbound
-        # if id_match := re.search("@.*", inline):
-        #     attachment_id = inline[id_match.start()+1:-1]
-        # else:
-        #     attachment_id = None
+        attachment_id = inline[id_match.start() + 1 : -1] if id_match else inline
 
         # find corresponding attachment in the message
-        attachment_name = inline[name_match.start() + 4 : name_match.end() - 1]
+        attachment_name = inline[name_match.start() + 4 : name_match.end() - 1] if name_match else inline[9:-1]
         attachment = [
             x
             for x in message.attachments
@@ -309,7 +304,6 @@ def plain2fancy(msg):
     insane outlook-style html section. The plaintext message is converted
     to HTML supporting markdown syntax.
     """
-    # INFO: Parser drafted reply via stdin msg
     reply = EmailReplyParser(languages=languages).read(text=msg)
     latest_reply = reply.latest_reply
     if latest_reply is not None:
@@ -347,34 +341,38 @@ def plain2fancy(msg):
     link_pattern = r"!\[.*?\]\((.*?)\)"
     matches = re.findall(link_pattern, latest_reply)
     # Replace in-line links with CID attachments and modify original links
+    cid_mapping = {}
+    new_reply = latest_reply
+
+    for link in matches:
+        file_name = link.split("/")[-1]  # Extract the file name as CID
+        cid = shortuuid.uuid(name=file_name)
+        cid_mapping[cid] = link
+        new_reply = new_reply.replace(link, f"cid:{cid}")
+        # TODO: Seems gmail OK but outlook could not render the inline by using this way, need to fix
+        madness = madness.replace(link, f"cid:{cid}") 
+
     if matches:
-        cid_mapping = {}
-        new_reply = latest_reply
-        for link in matches:
-            id = link.split("/")[-1]  # Extract the file name as CID
-            cid = shortuuid.uuid(name=id)
-            cid_mapping[cid] = link
-            for new_cid_link, original_link in cid_mapping.items():
-                new_reply = latest_reply.replace(original_link, f"cid:{new_cid_link}")
-        if new_reply != latest_reply:
-            new_msg = msg.replace(latest_reply, new_reply)
-            new_html = madness.replace(original_link, f"cid:{new_cid_link}")
-        attachments.extend(list(cid_mapping.items()))
+        new_msg = msg.replace(latest_reply, new_reply) 
+        logging.info(f"matches:\n{type(attachments)}\n")
+        attachments +=  list(cid_mapping.items()) if attachments else cid_mapping.items()
+        logging.info(f"matches:\n{str(attachments)}\n")
     else:
         new_msg = msg
-        new_html = madness
+
     logging.info(f"Final attachments:\n{str(attachments)}\n")
 
     # build string of <#part type=x filename=y disposition=inline><#/part> for each
     # attachment, separated by newlines
     attachment_str = ""
-    for attachment in attachments:
-        attachment_str += "<attach-file>'{}'<enter><toggle-disposition><edit-content-id>^u'{}'<enter><tag-entry>".format(
-            attachment[1], attachment[0]
-        )
+    if attachments:
+        for attachment in attachments:
+            attachment_str += "<attach-file>'{}'<enter><toggle-disposition><edit-content-id>^u'{}'<enter><tag-entry>".format(
+                attachment[1], attachment[0]
+            )
     # write html message to file for inspection before sending
     with open(htmlFile, "w") as f:
-        f.write(new_html)
+        f.write(madness)
 
     with open(markdownFile, "w") as f:
         f.write(new_msg)
@@ -396,10 +394,6 @@ if __name__ == "__main__":
     # stdin from pipe-message is full drafted msg
     stdin = sys.stdin.read()
     msg = stdin
-
-    # TODO: dummy plaintext for new TODO update later
-    # logging.info("piped entry is :\n{}\n".format(msg))
-
     try:
         plain2fancy(msg)
     except Exception as e:
