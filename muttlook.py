@@ -55,7 +55,7 @@ def export_inline_attachments(message, dstdir):
         logging.error(f"org message does not have mail_boundary: {e} :( )\n")
         message_html = message.body
     else:
-        logging.error("org message has mail_boundary :) \n")
+        logging.info("org message has mail_boundary :) \n")
     # .. or html version (probably safer?):
     inlines = re.findall('src="cid:.*?"', message_html)
 
@@ -75,22 +75,31 @@ def export_inline_attachments(message, dstdir):
         attachment = [
             x
             for x in message.attachments
-            if x["content-id"].startswith(f"<{attachment_name}")
+            if x["content-id"].startswith(f"<{attachment_name}@{attachment_id}")
         ]
-        assert len(attachment) == 1, f"Could not get attachment '{attachment_name}'"
-        attachment = attachment[0]
+        # assert len(attachment) >= 1, f"Could not find {attachment_id}: {attachment_name}"
+        if len(attachment)>=1:
+            attachment = attachment[0]
+        else:
+            logging.error(f"{attachment_id} is not found in msg.attachements")
+            break
 
         # base64 decode the file and place it in dstdir
         assert (
             attachment["content_transfer_encoding"] == "base64"
         ), "Only base64 currently supported"
-        b = base64.decodebytes(bytes(attachment["payload"], "ascii"))
+
         dstfile = os.path.join(dstdir, attachment_name)
+        while os.path.exists(dstfile):
+            base, ext = os.path.splitext(dstfile)
+            dstfile = f"{base}_extra{ext}"
+
+        b = base64.decodebytes(bytes(attachment["payload"], "ascii"))
         with open(dstfile, "wb") as f:
             f.write(b)
 
         # same attachment might occur multiple times - only add it once
-        att = (attachment_id, dstfile)
+        att = (f'{attachment_name}@{attachment_id}', dstfile)
         if att not in ret:
             ret.append(att)
 

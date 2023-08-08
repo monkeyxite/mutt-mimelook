@@ -7,13 +7,13 @@ Fork from a tool for [mu4e-mimelook](https://github.com/tausen/mu4e-mimelook), c
 - Support reply with Markdown but maintain the style
 - Support inline image
 
-### Other dependency
+### Other dependencies
 
 There are many tools installed in the machine to run the script for the purpose.
 
-- Neomutt (edit-content-id and MIME alternative multipart support)
+- Neomutt (edit-content-id and MIME alternative multipart support) not upstream mutt.
 - create tmp folder /tmp/muttlook?
-- Mutt-trim
+- [ Mutt-trim ](https://github.com/Konfekt/mutt-trim/blob/master/mutt-trim)
 
 ### Python dependencies
 
@@ -25,12 +25,17 @@ There are many tools installed in the machine to run the script for the purpose.
 
 Tested with Python 3.11.
 
+## Usage
+
+1. Modify muttrc 
+2. Modify mutt-trim
+
 ## To-do
 
-- [ ] Clean LSP diagnostics (unbound/…)
+- [x] Clean LSP diagnostics (unbound/…)
 - [ ] regex to filler out already cid or remote links
 - [ ] refectory and better documentation
-- [ ] clean madness after send…
+- [ ] clean madness after send: copy markdown attachment into tmp folder to enable so.
 - [ ] Test case for other occasions:
     - Gmail HTML
     - Gmail plain text
