@@ -12,8 +12,8 @@ Fork from a tool for [mu4e-mimelook](https://github.com/tausen/mu4e-mimelook), c
 There are many tools installed in the machine to run the script for the purpose.
 
 - Neomutt (edit-content-id and MIME alternative multipart support) not upstream mutt.
-- create tmp folder /tmp/muttlook?
-- [ Mutt-trim ](https://github.com/Konfekt/mutt-trim/blob/master/mutt-trim)
+- Create tmp folder /tmp/muttlook?
+- [Mutt-trim](https://github.com/Konfekt/mutt-trim/blob/master/mutt-trim)
 
 ### Python dependencies
 

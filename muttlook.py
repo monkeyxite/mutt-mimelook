@@ -17,14 +17,18 @@ from mailparser_reply import EmailReplyParser
 import logging
 import logging.handlers
 import shortuuid
+import shutil
+import click
 
 # due to some reason could not source mutt.cmd
+muttlook_temp_folder = "/tmp/muttlook/"
 commandsFile = "/tmp/muttlook/mutt_cmd"
 markdownFile = "/tmp/muttlook/mimelook-md"
 # orgMsg is generated everything when starting drafting reply via mutt-trim, configed via $editor in mutt  # noqa: E501
 orgMsg = "/tmp/muttlook/original.msg"
 htmlFile = "/tmp/muttlook/mimelook.html"
 logFile = "/tmp/muttlook/mimelog.log"
+newMailHTMLTemplate = "~/.pandoc/templates/email.html"
 # TODO: add Swedish and Chinese later
 languages = ["en", "de"]
 
@@ -68,14 +72,15 @@ def export_inline_attachments(message, dstdir):
 
         # find content id
         id_match = re.search("@.*", inline)
-        attachment_id = inline[id_match.start() + 1 : -1] if id_match else inline
+        attachment_id = inline[id_match.start() + 1 : -1] if id_match else inline.replace('"','').replace('src=cid:', '')
 
         # find corresponding attachment in the message
         attachment_name = inline[name_match.start() + 4 : name_match.end() - 1] if name_match else inline[9:-1]
         attachment = [
             x
             for x in message.attachments
-            if x["content-id"].startswith(f"<{attachment_name}@{attachment_id}")
+            # if x["content-id"].startswith(f"<{attachment_name}@{attachment_id}")
+            if x["content-id"].find(f"{attachment_id}".replace("cid:",""))!=-1
         ]
         # assert len(attachment) >= 1, f"Could not find {attachment_id}: {attachment_name}"
         if len(attachment)>=1:
@@ -326,23 +331,37 @@ def plain2fancy(msg):
     # Q&D way to get msg_id of the orignal msg to reply,  refer orgMsg def
     org_reply_msg = mailparser.parse_from_file(orgMsg)
 
-    reply_to_id = org_reply_msg.headers["In-Reply-To"][1:-1]
-    # logging.info("Reply-To-ID: {}\n".format(reply_to_id))
-    message = message_from_msgid(reply_to_id)
-    # logging.info("original message:\n{}\n".format(message.body))
+    if "In-Reply-To" in org_reply_msg.headers.keys():
+        reply_to_id = org_reply_msg.headers["In-Reply-To"][1:-1]
+        message = message_from_msgid(reply_to_id)
+        # insane outlook-style html reply
+        madness = format_outlook_reply(message, text2html)
+        # logging.info("formated message:\n{}\n".format(madness))
 
-    # insane outlook-style html reply
-    madness = format_outlook_reply(message, text2html)
-    # logging.info("formated message:\n{}\n".format(madness))
-
-    # find inline attachments and export them to a temporary dir
-    uuid = shortuuid.uuid(name=reply_to_id)
-    attdir = f"/tmp/muttlook/{uuid}"
-    if not os.path.isdir(attdir):
-        os.mkdir(attdir)
-    # attachments from mail to be replied
-    attachments = export_inline_attachments(message, attdir)
-    # logging.info("Old attachments:\n{}\n".format(str(attachments)))
+        # find inline attachments and export them to a temporary dir
+        uuid = shortuuid.uuid(name=reply_to_id)
+        attdir = f"/tmp/muttlook/{uuid}"
+        if not os.path.isdir(attdir):
+            os.mkdir(attdir)
+        # attachments from mail to be replied
+        attachments = export_inline_attachments(message, attdir) 
+    else:
+        reply_to_id = "Message-Radom-ID"
+        madness = ''
+        pandoc_command = [
+                "pandoc",
+                "-f", "markdown",
+                "-t", "html5", "--standalone",
+                "--template", newMailHTMLTemplate
+                ]
+        try:
+            # Run the pandoc command and pass the markdown content as input
+            #pandoc -f markdown -t html5 --standalone --template ~/.pandoc/templates/email.html "$markdownFile" > "$htmlFile"
+            madness = subprocess.run(pandoc_command, input=latest_reply, capture_output=True, text=True, check=True).stdout
+        except subprocess.CalledProcessError as e:
+            logging.error(f"Error generating HTML: {e}")
+        attdir = "/tmp/muttlook/"
+        attachments = []
 
     # Find inline attachment in reply and change md
     # re: !\[([^]]*)\]\(([^)]+)\)
@@ -354,8 +373,17 @@ def plain2fancy(msg):
     new_reply = latest_reply
 
     for link in matches:
-        file_name = link.split("/")[-1]  # Extract the file name as CID
-        cid = shortuuid.uuid(name=file_name)
+        filename = os.path.basename(link)
+        try:
+            os.makedirs(attdir, exist_ok=True)
+            filename = os.path.basename(link)
+            destination_path = os.path.join(attdir, filename)
+            shutil.copy(link, destination_path)
+            logging.info(f"File copied to: {attdir}")
+        except Exception as e:
+            logging.error(f"Error copying file: {e}")
+        # Generate cid acc to Outlook style: filename@uuid
+        cid = f"{filename}@{shortuuid.uuid(name=filename)}"
         cid_mapping[cid] = link
         new_reply = new_reply.replace(link, f"cid:{cid}")
         # TODO: Seems gmail OK but outlook could not render the inline by using this way, need to fix
@@ -398,13 +426,41 @@ def plain2fancy(msg):
         f.write(mutt_cmd)
     # return madness
 
+def send_hook_cleaner(path):
+    """Clean the temp files by called by send hook."""
+    muttlook_temp_folder = path
+    for root, dirs, files in os.walk(muttlook_temp_folder, topdown=False):
+        for file in files :
+            file_path = os.path.join(root, file)
+            # keep log
+            if ".log" not in file and "_cmd" not in file and "original" not in file:
+                os.remove(file_path)
+            logging.info (f"Deleted file: {file_path}")
+        
+        for dir_name in dirs:
+            dir_path = os.path.join(root, dir_name)
+            shutil.rmtree(dir_path)
+            logging.info(f"Deleted folder: {dir_path}")
+
+
+@click.command()
+@click.option("--action", type=click.Choice(["clean", "draft"]), help="Specify the action to perform.", required=True)
+def main(action):
+    """Wrap with click to have both draft and clean func."""
+    if action == "clean":
+        send_hook_cleaner(muttlook_temp_folder)
+    elif action == "draft":
+        stdin = sys.stdin.read()
+        msg = stdin
+        plain2fancy(msg)
 
 if __name__ == "__main__":
     # stdin from pipe-message is full drafted msg
-    stdin = sys.stdin.read()
-    msg = stdin
+    # TODO: let mutt do the hook action, org message is kept...
+    send_hook_cleaner(muttlook_temp_folder)
+
     try:
-        plain2fancy(msg)
+        main()
     except Exception as e:
         # logging.info("final message:\n{}\n".format(e))
         raise e
